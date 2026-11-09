@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>美容師カットカルテ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-[#0f1715] text-slate-100 antialiased min-h-screen pb-28">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const DEFAULT_STYLES = [
+            "ソフトモヒカン", "ベリーショート", "ワンレングスボブ", 
+            "グラデーションボブ", "ショートレイヤー", "刈り上げショート"
+        ];
+
+        const DEFAULT_TECHNIQUES = [
+            "ワンレングス", "グラデーション", "レイヤー", "直ばさみ",
+            "刈り上げ", "セニング / チョップ", "スライドカット", "テーパー / ポイントカット"
+        ];
+
+        const BLOCKING_SECTIONS = {
+            '0分割 (フリー)': ['トップ', 'サイド', 'バック', 'ネープ', 'フロント'],
+            '4分割': ['右サイド', '左サイド', '右バック', '左バック'],
+            '5分割': ['フロント（前髪・顔周り）', '右サイド', '左サイド', '右バック', '左バック'],
+            '6分割': ['フロント', '右サイド', '左サイド', 'トップ?ミドル', '右アンダー（ネープ）', '左アンダー（ネープ）'],
+            '9分割': ['1. フロント', '2. 右サイド', '3. 左サイド', '4. トップ', '5. 右ミドル', '6. 左ミドル', '7. 右アンダー', '8. 左アンダー', '9. ネープ']
+        };
+
+        const STORAGE_KEY_STYLES = 'hair_karte_styles_v46';
+        const STORAGE_KEY_TECHS = 'hair_karte_techs_v46';
+        const STORAGE_KEY_HISTORY = 'hair_karte_history_v46';
+        const STORAGE_KEY_AUTHOR = 'hair_karte_author_v46';
+        const STORAGE_KEY_ALIAS = 'hair_karte_alias_v46';
+        const STORAGE_KEY_PENDING_REFLECTIONS = 'hair_karte_pending_reflections_v46';
+        const STORAGE_KEY_PENDING_EVALS = 'hair_karte_pending_evals_v46';
+
+        function App() {
+            const todayStr = new Date().toISOString().split('T')[0];
+            const [activeTab, setActiveTab] = useState('input');
+            const [inputStep, setInputStep] = useState('step1_setting');
+
+            const [styleOptions, setStyleOptions] = useState(() => {
+                try {
+                    const saved = localStorage.getItem(STORAGE_KEY_STYLES);
+                    return saved ? JSON.parse(saved) : DEFAULT_STYLES;
+                } catch (e) { return DEFAULT_STYLES; }
+            });
+
+            const [techOptions, setTechOptions] = useState(() => {
+                try {
+                    const saved = localStorage.getItem(STORAGE_KEY_TECHS);
+                    return saved ? JSON.parse(saved) : DEFAULT_TECHNIQUES;
+                } catch (e) { return DEFAULT_TECHNIQUES; }
+            });
+
+            const [authorName, setAuthorName] = useState(() => {
+                try { return localStorage.getItem(STORAGE_KEY_AUTHOR) || '高橋 店長'; } catch (e) { return '高橋 店長'; }
+            });
+
+            const [aliasMap, setAliasMap] = useState(() => {
+                try {
+                    const saved = localStorage.getItem(STORAGE_KEY_ALIAS);
+                    return saved ? JSON.parse(saved) : {};
+                } catch (e) { return {}; }
+            });
+
+            // 履歴は完全に空（[]）からスタート
+            const [history, setHistory] = useState(() => {
+                try {
+                    const saved = localStorage.getItem(STORAGE_KEY_HISTORY);
+                    return saved ? JSON.parse(saved) : [];
+                } catch (e) { return []; }
+            });
+
+            const [pendingReflections, setPendingReflections] = useState(() => {
+                try {
+                    const saved = localStorage.getItem(STORAGE_KEY_PENDING_REFLECTIONS);
+                    return saved ? JSON.parse(saved) : [];
+                } catch (e) { return []; }
+            });
+
+            const [pendingEvals, setPendingEvals] = useState(() => {
+                try {
+                    const saved = localStorage.getItem(STORAGE_KEY_PENDING_EVALS);
+                    return saved ? JSON.parse(saved) : [];
+                } catch (e) { return []; }
+            });
+
+            const [selectedReflectionIndex, setSelectedReflectionIndex] = useState(0);
+            const [selectedEvalIndex, setSelectedEvalIndex] = useState(0);
+
+            // レポート用スタイル選択 ＆ 集計期間
+            const [reportStartDate, setReportStartDate] = useState('');
+            const [reportEndDate, setReportEndDate] = useState(todayStr);
+            const [reportSelectedStyle, setReportSelectedStyle] = useState('ALL');
+
+            // 分析画面用のスタイル選択
+            const [analysisSelectedStyle, setAnalysisSelectedStyle] = useState('ALL');
+
+            // Action画面用のスタイル索引
+            const [previewSelectedStyle, setPreviewSelectedStyle] = useState('ALL');
+
+            // フィードバック入力モーダル
+            const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
+            const [feedbackInputText, setFeedbackInputText] = useState('');
+
+            const handleAuthorChange = (name) => {
+                setAuthorName(name);
+                try { localStorage.setItem(STORAGE_KEY_AUTHOR, name); } catch (e) {}
+            };
+
+            const triggerDatePicker = (e) => {
+                if (e.target.showPicker) {
+                    try { e.target.showPicker(); } catch(err) {}
+                }
+            };
+
+            const createCleanKarte = () => {
+                const initialBlocking = '0分割 (フリー)';
+                const initialSecs = BLOCKING_SECTIONS[initialBlocking];
+                const generatedSections = {};
+                initialSecs.forEach(secName => {
+                    generatedSections[secName] = [{
+                        id: Date.now() + Math.random(),
+                        technique: techOptions[0] || 'ワンレングス',
+                        teacherSectionAdvice: '',
+                        selfRating: 3,
+                        ratingReason: ''
+                    }];
+                });
+
+                return {
+                    id: Date.now() + Math.random(),
+                    date: todayStr,
+                    author: authorName,
+                    startLength: 'ショート',
+                    goalStyle: styleOptions[0] || 'ソフトモヒカン',
+                    customStyleInput: '',
+                    blocking: initialBlocking,
+                    sections: generatedSections,
+                    planIntent: '', 
+                    teacherOverallChecks: {}, 
+                    teacherTotalComment: '', 
+                    pdcaNotes: { intent: [], discovery: [], teacherAdvice: [], nextAction: [] },
+                    feedbackText: ''
+                };
+            };
+
+            const [currentKarte, setCurrentKarte] = useState(createCleanKarte);
+            const [modalData, setModalData] = useState(null);
+
+            const [expandedTechniqueKey, setExpandedTechniqueKey] = useState(null);
+            const [expandedSectionKey, setExpandedSectionKey] = useState(null);
+
+            const [newInput, setNewInput] = useState({ intent: '', discovery: '', teacherAdvice: '', nextAction: '' });
+
+            const handleBlockingChange = (newBlocking) => {
+                const baseSecs = BLOCKING_SECTIONS[newBlocking] || BLOCKING_SECTIONS['0分割 (フリー)'];
+                const updatedSecs = {};
+                baseSecs.forEach(secName => {
+                    updatedSecs[secName] = [{
+                        id: Date.now() + Math.random(),
+                        technique: techOptions[0],
+                        teacherSectionAdvice: '',
+                        selfRating: 3,
+                        ratingReason: ''
+                    }];
+                });
+                setCurrentKarte(prev => ({ ...prev, blocking: newBlocking, sections: updatedSecs }));
+            };
+
+            const handleStyleChange = (e) => {
+                const val = e.target.value;
+                setCurrentKarte(prev => ({ ...prev, goalStyle: val, customStyleInput: '' }));
+            };
+
+            const handleSaveCustomStyle = () => {
+                if (!currentKarte.customStyleInput.trim()) return;
+                const newStyle = currentKarte.customStyleInput.trim();
+                if (!styleOptions.includes(newStyle)) {
+                    const updated = [...styleOptions, newStyle];
+                    setStyleOptions(updated);
+                    try { localStorage.setItem(STORAGE_KEY_STYLES, JSON.stringify(updated)); } catch (e) {}
+                }
+                setCurrentKarte(prev => ({ ...prev, goalStyle: newStyle, customStyleInput: '' }));
+            };
+
+            const addTechniqueToSection = (secName) => {
+                setCurrentKarte(prev => {
+                    const currentList = prev.sections[secName] || [];
+                    return {
+                        ...prev,
+                        sections: {
+                            ...prev.sections,
+                            [secName]: [...currentList, { id: Date.now() + Math.random(), technique: techOptions[0], teacherSectionAdvice: '', selfRating: 3, ratingReason: '' }]
+                        }
+                    };
+                });
+            };
+
+            const updateTechniqueItem = (secName, techId, field, val) => {
+                setCurrentKarte(prev => {
+                    const currentList = prev.sections[secName] || [];
+                    const updatedList = currentList.map(item => item.id === techId ? { ...item, [field]: val } : item);
+                    return { ...prev, sections: { ...prev.sections, [secName]: updatedList } };
+                });
+            };
+
+            const proceedToReflection = () => {
+                const finalStyle = currentKarte.goalStyle === 'CUSTOM_NEW' ? currentKarte.customStyleInput : currentKarte.goalStyle;
+                if (!finalStyle) return alert('スタイル名を入力してください');
+
+                const initialIntentList = currentKarte.planIntent.trim() ? [currentKarte.planIntent.trim()] : [];
+
+                const newItem = JSON.parse(JSON.stringify({
+                    ...currentKarte,
+                    author: authorName,
+                    goalStyle: finalStyle,
+                    isCompleted: true,
+                    pdcaNotes: {
+                        intent: initialIntentList,
+                        discovery: [],
+                        teacherAdvice: [],
+                        nextAction: []
+                    }
+                }));
+
+                const updatedReflections = [...pendingReflections, newItem];
+                setPendingReflections(updatedReflections);
+                try { localStorage.setItem(STORAGE_KEY_PENDING_REFLECTIONS, JSON.stringify(updatedReflections)); } catch (e) {}
+
+                setSelectedReflectionIndex(updatedReflections.length - 1);
+                setCurrentKarte(createCleanKarte());
+                setInputStep('step1_setting');
+                setActiveTab('reflection');
+            };
+
+            const updateActiveReflection = (updater) => {
+                setPendingReflections(prev => {
+                    if (prev.length === 0) return prev;
+                    const copy = [...prev];
+                    copy[selectedReflectionIndex] = updater(copy[selectedReflectionIndex]);
+                    try { localStorage.setItem(STORAGE_KEY_PENDING_REFLECTIONS, JSON.stringify(copy)); } catch (e) {}
+                    return copy;
+                });
+            };
+
+            const addPdcaNote = (cat) => {
+                if (!newInput[cat].trim()) return;
+                updateActiveReflection(item => ({
+                    ...item,
+                    pdcaNotes: { ...item.pdcaNotes, [cat]: [...(item.pdcaNotes[cat] || []), newInput[cat].trim()] }
+                }));
+                setNewInput({ ...newInput, [cat]: '' });
+            };
+
+            const removePdcaNote = (cat, idx) => {
+                updateActiveReflection(item => ({
+                    ...item,
+                    pdcaNotes: { ...item.pdcaNotes, [cat]: item.pdcaNotes[cat].filter((_, i) => i !== idx) }
+                }));
+            };
+
+            const proceedToActionCompare = () => {
+                const currentItem = pendingReflections[selectedReflectionIndex];
+                if (!currentItem) return;
+
+                let actions = [...(currentItem.pdcaNotes && currentItem.pdcaNotes.nextAction || [])];
+                if (newInput.nextAction.trim()) {
+                    actions.push(newInput.nextAction.trim());
+                }
+                const formattedActionText = actions.map((act, index) => `${index + 1}. ${act}`).join('\n');
+
+                const evalItem = JSON.parse(JSON.stringify({
+                    ...currentItem,
+                    finalActionText: formattedActionText
+                }));
+
+                const updatedEvals = [...pendingEvals, evalItem];
+                setPendingEvals(updatedEvals);
+                try { localStorage.setItem(STORAGE_KEY_PENDING_EVALS, JSON.stringify(updatedEvals)); } catch (e) {}
+
+                const remainingReflections = pendingReflections.filter((_, idx) => idx !== selectedReflectionIndex);
+                setPendingReflections(remainingReflections);
+                try { localStorage.setItem(STORAGE_KEY_PENDING_REFLECTIONS, JSON.stringify(remainingReflections)); } catch (e) {}
+
+                setSelectedReflectionIndex(Math.max(0, remainingReflections.length - 1));
+                setSelectedEvalIndex(updatedEvals.length - 1);
+                setActiveTab('action_compare');
+            };
+
+            const updateActiveEval = (updater) => {
+                setPendingEvals(prev => {
+                    if (prev.length === 0) return prev;
+                    const copy = [...prev];
+                    copy[selectedEvalIndex] = updater(copy[selectedEvalIndex]);
+                    try { localStorage.setItem(STORAGE_KEY_PENDING_EVALS, JSON.stringify(copy)); } catch (e) {}
+                    return copy;
+                });
+            };
+
+            const finalizeToHistory = (actionText) => {
+                const currentEval = pendingEvals[selectedEvalIndex];
+                if (!currentEval) return;
+
+                const finalEntry = {
+                    ...currentEval,
+                    finalActionText: actionText,
+                    savedAt: new Date().toISOString()
+                };
+
+                const updatedHistory = [finalEntry, ...history];
+                setHistory(updatedHistory);
+                try { localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(updatedHistory)); } catch (e) {}
+
+                const remainingEvals = pendingEvals.filter((_, idx) => idx !== selectedEvalIndex);
+                setPendingEvals(remainingEvals);
+                try { localStorage.setItem(STORAGE_KEY_PENDING_EVALS, JSON.stringify(remainingEvals)); } catch (e) {}
+
+                setSelectedEvalIndex(Math.max(0, remainingEvals.length - 1));
+                alert('カルテ履歴に正式登録されました！');
+
+                setNewInput({ intent: '', discovery: '', teacherAdvice: '', nextAction: '' });
+                setActiveTab('history');
+            };
+
+            const analysisFilteredHistory = history.filter(item => {
+                if (!item) return false;
+                if (analysisSelectedStyle !== 'ALL' && item.goalStyle !== analysisSelectedStyle) return false;
+                return true;
+            });
+
+            const analyzeByTechnique = (targetHistory) => {
+                if (!Array.isArray(targetHistory)) return [];
+                const techMap = {};
+
+                targetHistory.forEach(karte => {
+                    if (!karte || !karte.sections) return;
+                    Object.entries(karte.sections).forEach(([secName, techArray]) => {
+                        if (!Array.isArray(techArray)) return;
+                        techArray.forEach(t => {
+                            if (!t) return;
+                            const tech = t.technique || 'ワンレングス';
+                            let rawAdvice = (t.teacherSectionAdvice || '').trim();
+                            if (!rawAdvice) return;
+
+                            const advice = aliasMap[rawAdvice] || rawAdvice;
+
+                            if (!techMap[tech]) {
+                                techMap[tech] = { technique: tech, totalCount: 0, sectionsMap: {} };
+                            }
+                            techMap[tech].totalCount++;
+
+                            if (!techMap[tech].sectionsMap[secName]) {
+                                techMap[tech].sectionsMap[secName] = { section: secName, sectionCount: 0, advicesMap: {}, kartes: [] };
+                            }
+                            techMap[tech].sectionsMap[secName].sectionCount++;
+                            techMap[tech].sectionsMap[secName].kartes.push(karte);
+
+                            if (!techMap[tech].sectionsMap[secName].advicesMap[advice]) {
+                                techMap[tech].sectionsMap[secName].advicesMap[advice] = { adviceText: advice, rawTexts: new Set(), count: 0, kartes: [] };
+                            }
+                            techMap[tech].sectionsMap[secName].advicesMap[advice].rawTexts.add(rawAdvice);
+                            techMap[tech].sectionsMap[secName].advicesMap[advice].count++;
+                            techMap[tech].sectionsMap[secName].advicesMap[advice].kartes.push(karte);
+                        });
+                    });
+                });
+
+                return Object.values(techMap).map(techObj => {
+                    const sectionsArray = Object.values(techObj.sectionsMap).map(secObj => {
+                        const advicesArray = Object.values(secObj.advicesMap).map(adv => ({
+                            ...adv,
+                            rawTextsList: Array.from(adv.rawTexts)
+                        })).sort((a, b) => b.count - a.count);
+                        return { ...secObj, advices: advicesArray };
+                    }).sort((a, b) => b.sectionCount - a.sectionCount);
+                    return { ...techObj, sections: sectionsArray };
+                }).sort((a, b) => b.totalCount - a.totalCount);
+            };
+
+            const sortedHistoryNewestFirst = [...history].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+            const previewFilteredHistory = sortedHistoryNewestFirst.filter(item => {
+                if (previewSelectedStyle === 'ALL') return true;
+                return item.goalStyle === previewSelectedStyle;
+            });
+
+            const groupedByDate = sortedHistoryNewestFirst.reduce((acc, item) => {
+                if (!item) return acc;
+                const d = item.date || '未設定';
+                if (!acc[d]) acc[d] = [];
+                acc[d].push(item);
+                return acc;
+            }, {});
+            const sortedGroupedDates = Object.entries(groupedByDate).sort((a, b) => b[0].localeCompare(a[0]));
+
+            const analysisData = analyzeByTechnique(analysisFilteredHistory);
+            const currentReflectionItem = pendingReflections[selectedReflectionIndex] || null;
+            const currentEvalItem = pendingEvals[selectedEvalIndex] || null;
+
+            // レポート用フィルタ
+            const reportFilteredHistory = history.filter(item => {
+                if (!item || !item.date) return false;
+                if (reportStartDate && item.date < reportStartDate) return false;
+                if (reportEndDate && item.date > reportEndDate) return false;
+                if (reportSelectedStyle !== 'ALL' && item.goalStyle !== reportSelectedStyle) return false;
+                return true;
+            });
+
+            const reportAdviceSummaryMap = {};
+            reportFilteredHistory.forEach(karte => {
+                if (!karte.sections) return;
+                Object.entries(karte.sections).forEach(([sec, techList]) => {
+                    if (!Array.isArray(techList)) return;
+                    techList.forEach(t => {
+                        if (t.teacherSectionAdvice && t.teacherSectionAdvice.trim()) {
+                            const rawAdvice = t.teacherSectionAdvice.trim();
+                            const advice = aliasMap[rawAdvice] || rawAdvice;
+
+                            if (!reportAdviceSummaryMap[advice]) {
+                                reportAdviceSummaryMap[advice] = {
+                                    adviceText: advice,
+                                    count: 0,
+                                    issue: '入力されたアドバイスに基づく改善点',
+                                    action: rawAdvice,
+                                    category: '指導・指摘事項',
+                                    kartes: []
+                                };
+                            }
+                            reportAdviceSummaryMap[advice].count++;
+                            if (!reportAdviceSummaryMap[advice].kartes.some(k => k.id === karte.id)) {
+                                reportAdviceSummaryMap[advice].kartes.push(karte);
+                            }
+                        }
+                    });
+                });
+            });
+
+            const sortedAdviceSummaries = Object.values(reportAdviceSummaryMap).sort((a, b) => b.count - a.count);
+            const availableStylesForReport = ['ALL', ...new Set(history.map(h => h && h.goalStyle).filter(Boolean))];
+
+            const latestTargetKarte = reportFilteredHistory.length > 0 
+                ? [...reportFilteredHistory].sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0]
+                : (sortedHistoryNewestFirst.length > 0 ? sortedHistoryNewestFirst[0] : null);
+
+            const topAdvice = sortedAdviceSummaries[0];
+            
+            // データがまだ無い場合は正しい案内文にする
+            const conclusionText = history.length === 0 
+                ? '現在登録されているカルテデータがありません。「新規」タブからカルテを作成・登録してください。' 
+                : (topAdvice 
+                    ? `最も繰り返し指摘されている「${topAdvice.adviceText}」（${topAdvice.count}回）を意識したトレーニングが最優先です。` 
+                    : '直近のカルテに教わったこと（個別アドバイス）の入力がありません。');
+
+            const alignedActionText = history.length === 0 
+                ? '1. 新規カルテを作成してください\n2. 先生に教わったことを具体的に入力してください'
+                : (topAdvice 
+                    ? `1. ${topAdvice.action}\n2. カット施術直前に意識をセットするルーティンを徹底する`
+                    : (latestTargetKarte ? latestTargetKarte.finalActionText : '1. 姿勢と引き出し角度を意識する'));
+
+            const saveReportFeedback = () => {
+                if (!latestTargetKarte) return;
+                if (!feedbackInputText.trim()) return;
+
+                const updatedHistory = history.map(item => {
+                    if (item.id === latestTargetKarte.id) {
+                        return { ...item, feedbackText: feedbackInputText.trim() };
+                    }
+                    return item;
+                });
+
+                setHistory(updatedHistory);
+                try { localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(updatedHistory)); } catch (e) {}
+
+                setFeedbackModalOpen(false);
+                setFeedbackInputText('');
+                alert(`「${latestTargetKarte.goalStyle}」の最新Action文にフィードバックを追加しました！`);
+            };
+
+            return (
+                <div className="max-w-md mx-auto p-4 text-slate-100 text-base">
+                    <header className="bg-[#172220] p-4 rounded-2xl shadow-lg mb-4 border border-emerald-900/40 flex justify-between items-center">
+                        <div>
+                            <span className="text-xs text-emerald-400 font-bold uppercase tracking-wider">Hair Stylist Karte</span>
+                            <h1 className="text-xl font-extrabold text-white">カットカルテ</h1>
+                        </div>
+                    </header>
+
+                    {/* タブ1: 新規カルテ入力 */}
+                    {activeTab === 'input' && (
+                        <div className="space-y-4">
+                            <div className="grid grid-cols-3 gap-1.5 bg-[#172220] p-2 rounded-xl border border-emerald-900/40 font-bold text-center">
+                                <button onClick={() => setInputStep('step1_setting')} className={`py-2.5 rounded-lg text-sm transition ${inputStep === 'step1_setting' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400'}`}>1.設定</button>
+                                <button onClick={() => setInputStep('step2_sections')} className={`py-2.5 rounded-lg text-sm transition ${inputStep === 'step2_sections' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400'}`}>2.展開図</button>
+                                <button onClick={() => setInputStep('step3_overall')} className={`py-2.5 rounded-lg text-sm transition ${inputStep === 'step3_overall' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400'}`}>3.評価</button>
+                            </div>
+
+                            {inputStep === 'step1_setting' && (
+                                <div className="bg-[#172220] p-5 rounded-2xl shadow-xl border border-emerald-900/40 space-y-4">
+                                    <h2 className="font-bold text-emerald-300 text-base border-b border-emerald-900/50 pb-2">1. スタイル・ブロッキング設定</h2>
+                                    <div>
+                                        <label className="block text-sm text-slate-300 font-semibold mb-1.5">日付（クリックでカレンダー表示）</label>
+                                        <input 
+                                            type="date" 
+                                            value={currentKarte.date} 
+                                            onClick={triggerDatePicker}
+                                            onFocus={triggerDatePicker}
+                                            onChange={(e) => setCurrentKarte({ ...currentKarte, date: e.target.value })} 
+                                            className="w-full bg-[#0f1715] border border-emerald-900/60 rounded-xl p-3.5 text-base text-white cursor-pointer font-bold block" 
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm text-slate-300 font-semibold mb-1.5">初期レングス</label>
+                                        <select value={currentKarte.startLength} onChange={(e) => setCurrentKarte({ ...currentKarte, startLength: e.target.value })} className="w-full bg-[#0f1715] border border-emerald-900/60 rounded-xl p-3 text-base text-white">
+                                            <option>ショート</option><option>ミディアム</option><option>ロング</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm text-slate-300 font-semibold mb-1.5">ゴールスタイル</label>
+                                        <select value={currentKarte.goalStyle} onChange={handleStyleChange} className="w-full bg-[#0f1715] border border-emerald-900/60 rounded-xl p-3 text-base text-white font-bold">
+                                            {styleOptions.map((s, i) => <option key={i} value={s}>{s}</option>)}
+                                            <option value="CUSTOM_NEW">自由入力（追加登録）</option>
+                                        </select>
+                                    </div>
+
+                                    {currentKarte.goalStyle === 'CUSTOM_NEW' && (
+                                        <div className="flex gap-2 items-center bg-[#0f1715] p-3.5 rounded-xl border border-emerald-800">
+                                            <input type="text" placeholder="新しいスタイル名..." value={currentKarte.customStyleInput} onChange={(e) => setCurrentKarte({ ...currentKarte, customStyleInput: e.target.value })} className="flex-1 bg-[#172220] border border-emerald-900 p-2.5 text-base rounded-lg text-white" />
+                                            <button onClick={handleSaveCustomStyle} className="bg-emerald-600 text-white text-sm px-4 py-2.5 rounded-lg font-bold">登録</button>
+                                        </div>
+                                    )}
+
+                                    <div>
+                                        <label className="block text-sm text-slate-300 font-semibold mb-1.5">ブロッキング分割数</label>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {['0分割 (フリー)', '4分割', '5分割', '6分割', '9分割'].map((b) => (
+                                                <button key={b} onClick={() => handleBlockingChange(b)} className={`py-2.5 text-xs font-bold rounded-xl border transition ${currentKarte.blocking === b ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-[#0f1715] border-emerald-900/60 text-slate-300'}`}>{b}</button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <button onClick={() => setInputStep('step2_sections')} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl text-base mt-2 shadow-lg transition">
+                                        次へ：2.展開図に進む
+                                    </button>
+                                </div>
+                            )}
+
+                            {inputStep === 'step2_sections' && (
+                                <div className="space-y-4">
+                                    <div className="bg-[#172220] p-4.5 rounded-2xl border border-emerald-900/40 space-y-2">
+                                        <label className="block text-base font-bold text-emerald-400">【Plan】本日の狙いと目標</label>
+                                        <input 
+                                            type="text" 
+                                            value={currentKarte.planIntent} 
+                                            onChange={(e) => setCurrentKarte({ ...currentKarte, planIntent: e.target.value })}
+                                            placeholder="例: 凸部分を目線に合わせる姿勢をつくり、位置を厳密に決める"
+                                            className="w-full bg-[#0f1715] border border-emerald-900 rounded-xl p-3 text-base text-white"
+                                        />
+                                    </div>
+
+                                    <div className="space-y-4">
+                                        {Object.keys(currentKarte.sections).map((secName, sIdx) => (
+                                            <div key={sIdx} className="bg-[#172220] p-4.5 rounded-2xl border border-emerald-900/40 space-y-3.5 shadow-md">
+                                                <div className="flex justify-between items-center border-b border-emerald-900/50 pb-2.5">
+                                                    <span className="font-bold text-base text-emerald-300">部位: {secName}</span>
+                                                    <button onClick={() => addTechniqueToSection(secName)} className="text-xs bg-emerald-950 text-emerald-400 border border-emerald-800 font-bold px-3 py-1.5 rounded-lg">+ 技法追加</button>
+                                                </div>
+
+                                                {currentKarte.sections[secName].map((item) => (
+                                                    <div key={item.id} className="bg-[#0f1715] p-3.5 rounded-xl border border-emerald-900/50 space-y-3">
+                                                        <div className="grid grid-cols-1 gap-2.5">
+                                                            <div>
+                                                                <label className="block text-xs text-slate-300 font-bold mb-1">カット技法</label>
+                                                                <select value={item.technique} onChange={(e) => updateTechniqueItem(secName, item.id, 'technique', e.target.value)} className="w-full bg-[#172220] border border-emerald-900 rounded-lg p-2.5 text-base text-white">
+                                                                    {techOptions.map((t, i) => <option key={i} value={t}>{t}</option>)}
+                                                                </select>
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-xs text-emerald-400 font-bold mb-1">教わったこと（自由入力）</label>
+                                                                <input 
+                                                                    type="text" 
+                                                                    value={item.teacherSectionAdvice} 
+                                                                    onChange={(e) => updateTechniqueItem(secName, item.id, 'teacherSectionAdvice', e.target.value)} 
+                                                                    placeholder="例: 肘が上がるので下げる、腰を下げる" 
+                                                                    className="w-full bg-[#172220] border border-emerald-800 rounded-lg p-2.5 text-base text-white font-bold" 
+                                                                />
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="pt-2.5 border-t border-emerald-950 space-y-2">
+                                                            <div className="flex justify-between items-center text-base">
+                                                                <span className="text-slate-300 font-bold">自己評価:</span>
+                                                                <div className="flex gap-2">
+                                                                    {[1, 2, 3, 4, 5].map((star) => (
+                                                                        <button key={star} onClick={() => updateTechniqueItem(secName, item.id, 'selfRating', star)} className={`w-8 h-8 rounded-md text-base font-bold transition ${item.selfRating >= star ? 'bg-amber-400 text-slate-950 shadow' : 'bg-[#172220] text-slate-500 border border-emerald-900'}`}>★</button>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                            {item.selfRating <= 2 && (
+                                                                <input type="text" value={item.ratingReason} onChange={(e) => updateTechniqueItem(secName, item.id, 'ratingReason', e.target.value)} placeholder="評価2以下の理由" className="w-full bg-[#172220] border border-rose-900/60 rounded-lg p-2.5 text-sm text-rose-200 mt-1" />
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <button onClick={() => setInputStep('step3_overall')} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl text-base shadow-lg transition">
+                                        次へ：3.全体評価に進む
+                                    </button>
+                                </div>
+                            )}
+
+                            {inputStep === 'step3_overall' && (
+                                <div className="bg-[#172220] p-5 rounded-2xl border border-emerald-900/40 space-y-4">
+                                    <h2 className="font-bold text-emerald-300 text-base border-b border-emerald-900/50 pb-2">3.全体評価とまとめ</h2>
+                                    <div>
+                                        <label className="block font-bold text-slate-300 mb-1.5">採点者名</label>
+                                        <input 
+                                            type="text" 
+                                            value={authorName} 
+                                            onChange={(e) => handleAuthorChange(e.target.value)}
+                                            placeholder="例: 山田 太郎"
+                                            className="w-full bg-[#0f1715] border border-emerald-900 rounded-xl p-3 text-base text-white font-bold"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block font-bold text-emerald-400 mb-1.5">トータル全体コメント</label>
+                                        <input 
+                                            type="text" 
+                                            value={currentKarte.teacherTotalComment} 
+                                            onChange={(e) => setCurrentKarte({ ...currentKarte, teacherTotalComment: e.target.value })}
+                                            placeholder="例: 全体的にシルエットが綺麗になったが、ネープの締まりを次回意識しよう"
+                                            className="w-full bg-[#0f1715] border border-emerald-900 rounded-xl p-3 text-base text-white"
+                                        />
+                                    </div>
+                                    <button onClick={proceedToReflection} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl text-base shadow-xl transition">
+                                        評価を保存（一時保存して振り返りへ）
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* タブ2: 振り返り */}
+                    {activeTab === 'reflection' && (
+                        <div className="bg-[#172220] p-5 rounded-2xl border border-emerald-900/40 space-y-4">
+                            <h2 className="font-bold text-emerald-300 text-base border-b border-emerald-900/50 pb-2">本日のカット振り返り（PDCA整理）</h2>
+
+                            {pendingReflections.length > 1 && (
+                                <select 
+                                    value={selectedReflectionIndex} 
+                                    onChange={(e) => setSelectedReflectionIndex(Number(e.target.value))}
+                                    className="w-full bg-[#0f1715] border border-emerald-900 rounded-xl p-3 text-base text-white font-bold"
+                                >
+                                    {pendingReflections.map((item, idx) => (
+                                        <option key={idx} value={idx}>{idx + 1}. {item.date} - {item.goalStyle} ({item.author})</option>
+                                    ))}
+                                </select>
+                            )}
+
+                            {!currentReflectionItem ? (
+                                <div className="text-center py-8 space-y-3">
+                                    <p className="text-base text-slate-300">現在振り返り待ちのカルテはありません。</p>
+                                    <button onClick={() => { setActiveTab('input'); setInputStep('step1_setting'); }} className="bg-emerald-600 text-white font-bold text-base px-5 py-2.5 rounded-xl">新規カルテを作成</button>
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    <div className="bg-[#0f1715] p-3.5 rounded-xl border border-emerald-900/60 text-base">
+                                        <span className="font-bold text-white">{currentReflectionItem.goalStyle} ({currentReflectionItem.startLength})</span> 採点者: {currentReflectionItem.author}
+                                    </div>
+
+                                    {[
+                                        { key: 'intent', label: '【Plan】自分の狙い・工夫', placeholder: '工夫を追加...' },
+                                        { key: 'discovery', label: '【Do】やってみた感触', placeholder: '例: グラデーションが切りきれなかった' },
+                                        { key: 'teacherAdvice', label: '【Check】先生の教えで納得したこと', placeholder: '例: 開閉スピードを速くする' },
+                                        { key: 'nextAction', label: '【Action】次回試すこと', placeholder: '例: 足さばきの徹底' }
+                                    ].map((cat) => (
+                                        <div key={cat.key} className="bg-[#0f1715] p-3.5 rounded-xl border border-emerald-900/60 space-y-2">
+                                            <label className="block font-bold text-emerald-400 text-sm">{cat.label}</label>
+                                            <ul className="space-y-2">
+                                                {(currentReflectionItem.pdcaNotes && currentReflectionItem.pdcaNotes[cat.key] || []).map((item, i) => (
+                                                    <li key={i} className="flex justify-between items-center bg-[#172220] p-2.5 rounded-lg text-sm">
+                                                        <span>{item}</span>
+                                                        <button onClick={() => removePdcaNote(cat.key, i)} className="text-rose-400 font-bold px-2 text-base">?</button>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                            <div className="flex gap-2.5 pt-1">
+                                                <input 
+                                                    type="text" 
+                                                    value={newInput[cat.key]} 
+                                                    onChange={(e) => setNewInput({ ...newInput, [cat.key]: e.target.value })}
+                                                    placeholder={cat.placeholder}
+                                                    className="flex-1 bg-[#172220] border border-emerald-900 rounded-lg p-2.5 text-sm text-white"
+                                                />
+                                                <button onClick={() => addPdcaNote(cat.key)} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold">追加</button>
+                                            </div>
+                                        </div>
+                                    ))}
+
+                                    <button onClick={proceedToActionCompare} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl text-base shadow-lg transition">
+                                        振り返りを完了して評価に進む
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* タブ3: 全体評価 */}
+                    {activeTab === 'action_compare' && (
+                        <div className="bg-[#172220] p-5 rounded-2xl border border-emerald-900/40 space-y-4">
+                            <h2 className="font-bold text-emerald-300 text-base border-b border-emerald-900/50 pb-2">全体評価（次回に向けて）</h2>
+
+                            {!currentEvalItem ? (
+                                <div className="text-center py-8">
+                                    <p className="text-slate-300 text-base">評価待ちのカルテはありません。</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    <div className="bg-[#0f1715] p-4 rounded-xl border border-emerald-900/60 space-y-2.5">
+                                        <label className="block font-bold text-emerald-400 text-base">ギャップを踏まえた【次回へのAction】</label>
+                                        <textarea 
+                                            rows="4"
+                                            value={currentEvalItem.finalActionText || ''}
+                                            onChange={(e) => updateActiveEval(item => ({ ...item, finalActionText: e.target.value }))}
+                                            className="w-full bg-[#172220] border border-emerald-900 rounded-xl p-3 text-base text-white font-mono"
+                                        ></textarea>
+                                    </div>
+                                    <button onClick={() => finalizeToHistory(currentEvalItem.finalActionText)} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl text-base shadow-xl transition">
+                                        Actionを決定して履歴に最終登録する
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* タブ4: 次回action確認 */}
+                    {activeTab === 'preview' && (
+                        <div className="space-y-4">
+                            <div className="bg-[#172220] p-4 rounded-xl border border-emerald-900/40 flex items-center justify-between gap-3">
+                                <span className="font-bold text-emerald-400 text-sm flex-shrink-0">スタイル索引:</span>
+                                <select 
+                                    value={previewSelectedStyle} 
+                                    onChange={(e) => setPreviewSelectedStyle(e.target.value)}
+                                    className="flex-1 bg-[#0f1715] border border-emerald-900 rounded-lg p-2.5 text-sm text-white font-bold"
+                                >
+                                    {availableStylesForReport.map((s, i) => (
+                                        <option key={i} value={s}>{s === 'ALL' ? 'すべてのスタイル（全表示）' : s}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <h2 className="font-bold text-emerald-300 text-base px-1">次回Action（参考指示書 - 新しい順 / {previewFilteredHistory.length}件）</h2>
+                            
+                            {previewFilteredHistory.length === 0 ? (
+                                <p className="text-slate-300 text-center py-8 bg-[#172220] rounded-xl text-base">該当するスタイルのActionがありません。</p>
+                            ) : (
+                                previewFilteredHistory.map((item) => (
+                                    <div key={item.id} className="bg-[#172220] p-4 rounded-2xl border border-emerald-900/40 space-y-3">
+                                        <div className="font-bold text-emerald-300 text-base border-b border-emerald-900/50 pb-2 flex justify-between items-center">
+                                            <span>{item.date} - {item.goalStyle} ({item.author})</span>
+                                        </div>
+
+                                        <div className="p-3.5 bg-[#0f1715] rounded-xl border border-emerald-900/60 whitespace-pre-line text-emerald-100 font-semibold text-sm">
+                                            {item.finalActionText || '未設定'}
+                                        </div>
+
+                                        {item.feedbackText && (
+                                            <div className="p-3 bg-cyan-950/80 border border-cyan-500/70 rounded-xl text-cyan-200 font-bold leading-relaxed text-sm">
+                                                <span className="bg-cyan-600 text-slate-950 text-xs px-2 py-0.5 rounded font-black mr-2 tracking-wider">
+                                                    【レポートFB】
+                                                </span>
+                                                {item.feedbackText}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    )}
+
+                    {/* タブ5: 履歴 */}
+                    {activeTab === 'history' && (
+                        <div className="space-y-4">
+                            <div className="bg-[#172220] p-4 rounded-2xl border border-emerald-900/40 flex justify-between items-center">
+                                <h2 className="font-bold text-white text-base">蓄積済みカルテ履歴（新しい順 / {history.length}件）</h2>
+                                {history.length > 0 && (
+                                    <button 
+                                        onClick={() => {
+                                            if (confirm('すべての履歴データをクリアしますか？')) {
+                                                setHistory([]);
+                                                try { localStorage.removeItem(STORAGE_KEY_HISTORY); } catch(e) {}
+                                            }
+                                        }}
+                                        className="bg-rose-950 text-rose-300 border border-rose-800 text-xs px-3 py-1.5 rounded-lg font-bold"
+                                    >
+                                        履歴全削除
+                                    </button>
+                                )}
+                            </div>
+
+                            {history.length === 0 ? (
+                                <p className="text-slate-300 text-center py-12 bg-[#172220] rounded-2xl text-base">まだ登録されたカルテ履歴はありません。<br/>新規タブから作成してください。</p>
+                            ) : (
+                                sortedGroupedDates.map(([dateStr, items]) => (
+                                    <div key={dateStr} className="bg-[#172220] rounded-2xl border border-emerald-900/40 p-4 space-y-3">
+                                        <div className="font-bold text-emerald-400 text-base border-b border-emerald-900/50 pb-2">{dateStr} ({items.length}件)</div>
+                                        {items.map((item) => (
+                                            <div key={item.id} className="bg-[#0f1715] p-3.5 rounded-xl border border-emerald-900/50 space-y-2">
+                                                <div className="font-bold text-white text-base">{item.goalStyle} <span className="text-slate-400 font-normal text-sm">({item.author})</span></div>
+                                                <div className="text-slate-200 text-sm">
+                                                    {Object.entries(item.sections || {}).map(([sec, list], sIdx) => {
+                                                        const firstItem = list && list[0];
+                                                        const adviceText = firstItem && firstItem.teacherSectionAdvice ? firstItem.teacherSectionAdvice : 'なし';
+                                                        return (
+                                                            <div key={sIdx}>・{sec}: {adviceText}</div>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <div className="p-2.5 bg-[#172220] rounded text-emerald-200 text-sm font-mono mt-1">
+                                                    {item.finalActionText}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    )}
+
+                    {/* タブ6: 分析結果 */}
+                    {activeTab === 'analysis_result' && (
+                        <div className="bg-[#172220] p-5 rounded-2xl border border-emerald-900/40 space-y-4">
+                            <div className="flex items-center justify-between gap-3 border-b border-emerald-900/50 pb-3">
+                                <h2 className="font-bold text-emerald-300 text-base">分析結果</h2>
+                                <select 
+                                    value={analysisSelectedStyle} 
+                                    onChange={(e) => setAnalysisSelectedStyle(e.target.value)}
+                                    className="bg-[#0f1715] border border-emerald-900 rounded-lg p-2 text-sm text-white font-bold"
+                                >
+                                    {availableStylesForReport.map((s, i) => (
+                                        <option key={i} value={s}>{s === 'ALL' ? 'すべてのスタイル（全表示）' : s}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            
+                            {analysisData.length === 0 ? (
+                                <p className="text-slate-300 text-center py-8 text-base">データが蓄積されると、技法ごとの指摘傾向がここに集計されます。</p>
+                            ) : (
+                                <div className="space-y-3.5">
+                                    {analysisData.map((techObj) => {
+                                        const isTechExpanded = expandedTechniqueKey === techObj.technique;
+                                        return (
+                                            <div key={techObj.technique} className="bg-[#0f1715] rounded-xl border border-emerald-950 overflow-hidden">
+                                                <button onClick={() => setExpandedTechniqueKey(isTechExpanded ? null : techObj.technique)} className="w-full p-4 text-left font-bold flex justify-between items-center hover:bg-emerald-950/20">
+                                                    <span className="text-white font-extrabold text-base">{techObj.technique} <span className="ml-2 bg-emerald-900 text-emerald-200 px-2.5 py-0.5 rounded-full text-xs">総指摘数: {techObj.totalCount}回</span></span>
+                                                    <span className="text-emerald-400 text-sm">{isTechExpanded ? '閉じる' : '部位別一覧'}</span>
+                                                </button>
+
+                                                {isTechExpanded && (
+                                                    <div className="p-3.5 bg-[#172220] border-t border-emerald-900/50 space-y-3">
+                                                        {techObj.sections.map((secObj, sIdx) => {
+                                                            const secKey = `${techObj.technique}_${secObj.section}`;
+                                                            const isSecExpanded = expandedSectionKey === secKey;
+                                                            return (
+                                                                <div key={sIdx} className="bg-[#0f1715] rounded-lg border border-emerald-900/50 overflow-hidden">
+                                                                    <div onClick={() => setExpandedSectionKey(isSecExpanded ? null : secKey)} className="p-3 bg-emerald-950/40 cursor-pointer flex justify-between items-center font-bold">
+                                                                        <span className="text-emerald-200 text-sm">部位: {secObj.section} ({secObj.sectionCount}回)</span>
+                                                                        <span className="text-emerald-400 text-xs">{isSecExpanded ? '閉じる' : '言葉の内訳'}</span>
+                                                                    </div>
+                                                                    {isSecExpanded && (
+                                                                        <div className="p-3 space-y-2 border-t border-emerald-900/40">
+                                                                            {secObj.advices.map((advObj, aI) => (
+                                                                                <div key={aI} className="bg-[#172220] p-3 rounded border border-emerald-900 flex justify-between items-center">
+                                                                                    <div>
+                                                                                        <span className="font-bold text-white text-sm">「{advObj.adviceText}」</span>
+                                                                                        <span className="ml-2 text-rose-300 bg-rose-950 px-2 py-0.5 rounded text-xs">{advObj.count}回</span>
+                                                                                    </div>
+                                                                                    <button onClick={() => {
+                                                                                        const sortedKartes = [...advObj.kartes].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+                                                                                        setModalData({ title: `${techObj.technique} × ${secObj.section} 「${advObj.adviceText}」`, kartes: sortedKartes });
+                                                                                    }} className="bg-emerald-600 text-white px-3 py-1.5 rounded text-xs font-bold">カルテ表示</button>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* タブ7: レポート画面 */}
+                    {activeTab === 'report' && (
+                        <div className="space-y-4">
+                            <div className="bg-[#172220] p-4 rounded-2xl border border-emerald-900/40 space-y-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <span className="font-bold text-emerald-400 text-sm flex-shrink-0">スタイル索引:</span>
+                                    <select 
+                                        value={reportSelectedStyle} 
+                                        onChange={(e) => setReportSelectedStyle(e.target.value)}
+                                        className="flex-1 bg-[#0f1715] border border-emerald-900 rounded-lg p-2.5 text-sm text-white font-bold"
+                                    >
+                                        {availableStylesForReport.map((s, i) => (
+                                            <option key={i} value={s}>{s === 'ALL' ? 'すべてのスタイル（全表示）' : s}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div className="flex items-center justify-between gap-3 pt-2 border-t border-emerald-900/40">
+                                    <span className="font-bold text-emerald-400 text-sm flex-shrink-0">集計期間:</span>
+                                    <div className="flex gap-2 items-center flex-1 justify-end">
+                                        <input 
+                                            type="date" 
+                                            value={reportStartDate} 
+                                            onClick={triggerDatePicker}
+                                            onFocus={triggerDatePicker}
+                                            onChange={(e) => setReportStartDate(e.target.value)}
+                                            className="w-32 bg-[#0f1715] border border-emerald-900 rounded-lg p-2 text-xs text-white font-bold text-center"
+                                        />
+                                        <span className="text-slate-400 text-sm">-</span>
+                                        <input 
+                                            type="date" 
+                                            value={reportEndDate} 
+                                            onClick={triggerDatePicker}
+                                            onFocus={triggerDatePicker}
+                                            onChange={(e) => setReportEndDate(e.target.value)}
+                                            className="w-32 bg-[#0f1715] border border-emerald-900 rounded-lg p-2 text-xs text-white font-bold text-center"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* レポートカード */}
+                            <div className="bg-[#0f1715] p-5 rounded-3xl border-2 border-emerald-500/80 shadow-2xl space-y-4">
+                                <div className="text-center border-b border-emerald-900/80 pb-3">
+                                    <span className="text-xs text-emerald-400 uppercase tracking-widest font-extrabold">Skill Growth Report</span>
+                                    <h3 className="text-lg font-black text-white mt-0.5">カット技術 弱点・改善アクションシート</h3>
+                                    <p className="text-xs text-slate-300 mt-1">
+                                        対象スタイル: <span className="text-emerald-300 font-bold">{reportSelectedStyle}</span> （カルテ件数: {reportFilteredHistory.length}件）
+                                    </p>
+                                </div>
+
+                                {/* 結論ボックス */}
+                                <div className="bg-emerald-950/80 p-3.5 rounded-2xl border border-emerald-600 space-y-1.5 shadow">
+                                    <span className="font-black text-emerald-300 text-sm flex items-center gap-1.5">
+                                        <span>【分析の結論：次に直すべき最重要ポイント】</span>
+                                    </span>
+                                    <p className="text-sm text-slate-100 font-bold leading-relaxed">
+                                        {conclusionText}
+                                    </p>
+                                </div>
+
+                                {/* 重点課題 */}
+                                <div className="space-y-2.5">
+                                    <h4 className="font-bold text-emerald-300 text-sm">【直近の最重点課題（理由と改善策）】</h4>
+                                    {sortedAdviceSummaries.length === 0 ? (
+                                        <p className="text-sm text-slate-400 text-center py-4 bg-[#172220] rounded-xl">データがありません。カルテを蓄積してください。</p>
+                                    ) : (
+                                        sortedAdviceSummaries.slice(0, 2).map((advItem, idx) => (
+                                            <div key={idx} className="bg-[#172220] p-3.5 rounded-2xl border border-emerald-900/60 leading-normal space-y-1.5">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-white font-bold text-sm">
+                                                        {idx + 1}. 「{advItem.adviceText}」
+                                                    </span>
+                                                    <button 
+                                                        onClick={() => {
+                                                            const sortedKartes = [...advItem.kartes].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+                                                            setModalData({ title: `弱点指摘「${advItem.adviceText}」`, kartes: sortedKartes });
+                                                        }}
+                                                        className="bg-rose-950 hover:bg-rose-900 text-rose-300 px-2.5 py-1 rounded-lg text-xs font-bold border border-rose-900 flex items-center gap-1.5 transition"
+                                                    >
+                                                        <span>{advItem.count}回指摘</span>
+                                                        <span>[カルテ確認]</span>
+                                                    </button>
+                                                </div>
+                                                <div className="text-xs text-rose-300">
+                                                    <span className="font-bold">問題: </span>{advItem.issue}
+                                                </div>
+                                                <div className="text-xs text-emerald-200">
+                                                    <span className="font-bold">改善: </span>{advItem.action}
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+
+                                {/* 最重点課題に直接連動するAction */}
+                                <div className="space-y-2.5 border-t border-emerald-900/60 pt-3">
+                                    <div className="flex justify-between items-center">
+                                        <h4 className="font-bold text-emerald-300 text-sm">【課題克服のための重点Action】</h4>
+                                        <button 
+                                            onClick={() => {
+                                                setFeedbackInputText(latestTargetKarte && latestTargetKarte.feedbackText ? latestTargetKarte.feedbackText : '');
+                                                setFeedbackModalOpen(true);
+                                            }}
+                                            className="bg-cyan-600 hover:bg-cyan-500 text-slate-950 px-3 py-1.5 rounded-lg text-xs font-black shadow flex items-center gap-1.5 transition"
+                                        >
+                                            <span>+ FB記入</span>
+                                        </button>
+                                    </div>
+
+                                    <div className="bg-[#172220] p-3 rounded-2xl border border-emerald-900/60 text-sm text-slate-200 whitespace-pre-line font-mono">
+                                        {alignedActionText}
+                                    </div>
+
+                                    {latestTargetKarte && latestTargetKarte.feedbackText && (
+                                        <div className="p-3 bg-cyan-950/90 border border-cyan-500/70 rounded-2xl text-cyan-200 text-sm font-bold">
+                                            <span className="bg-cyan-600 text-slate-950 text-xs px-2 py-0.5 rounded font-black mr-2">
+                                                【レポートFB】
+                                            </span>
+                                            {latestTargetKarte.feedbackText}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="text-center text-xs text-slate-400 pt-2 border-t border-emerald-950">
+                                    美容師カットカルテ - Professional Skill Growth Tracker
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ボトムナビゲーション */}
+                    <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-[#131d1b] border-t border-emerald-900/50 px-2 py-2.5 flex justify-around items-center z-40 shadow-2xl">
+                        {[
+                            { id: 'input', label: '新規', badge: 0 },
+                            { id: 'reflection', label: '振返り', badge: pendingReflections.length },
+                            { id: 'action_compare', label: '評価', badge: pendingEvals.length },
+                            { id: 'preview', label: 'Action', badge: 0 },
+                            { id: 'history', label: '履歴', badge: 0 },
+                            { id: 'analysis_result', label: '分析', badge: 0 },
+                            { id: 'report', label: 'レポート', badge: 0 }
+                        ].map((tab) => (
+                            <button
+                                key={tab.id}
+                                onClick={() => setActiveTab(tab.id)}
+                                className={`relative flex flex-col items-center flex-1 py-1 transition ${activeTab === tab.id ? 'text-emerald-400 font-extrabold scale-105' : 'text-slate-400'}`}
+                            >
+                                <span className="text-xs tracking-tight font-bold">{tab.label}</span>
+                                {tab.badge > 0 && (
+                                    <span className="absolute -top-1.5 right-1 bg-rose-500 text-white text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center border border-[#131d1b]">
+                                        {tab.badge}
+                                    </span>
+                                )}
+                            </button>
+                        ))}
+                    </nav>
+
+                    {/* カルテ詳細表示モーダル */}
+                    {modalData && (
+                        <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
+                            <div className="bg-[#172220] border border-emerald-800 rounded-2xl max-w-lg w-full p-5 space-y-4 max-h-[80vh] overflow-y-auto shadow-2xl text-base">
+                                <div className="flex justify-between items-center border-b border-emerald-900 pb-3">
+                                    <h3 className="font-bold text-white text-base">{modalData.title}</h3>
+                                    <button onClick={() => setModalData(null)} className="text-slate-400 hover:text-white font-bold text-sm bg-emerald-950 px-3 py-1 rounded-lg">閉じる</button>
+                                </div>
+                                <div className="space-y-3">
+                                    {(modalData.kartes || []).map((k) => (
+                                        <div key={k.id} className="bg-[#0f1715] p-4 rounded-xl border border-emerald-900/60 space-y-2">
+                                            <div className="font-bold text-emerald-300 text-sm">{k.date} - {k.goalStyle} (採点者: {k.author})</div>
+                                            <div className="text-slate-200 text-sm"><strong>Action:</strong> {k.finalActionText || '未設定'}</div>
+                                            {k.feedbackText && (
+                                                <div className="text-cyan-300 text-sm font-bold pt-1">
+                                                    【レポートFB】: {k.feedbackText}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                                <button onClick={() => setModalData(null)} className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-3 rounded-xl text-base">閉じる</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* フィードバック入力用モーダル */}
+                    {feedbackModalOpen && (
+                        <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
+                            <div className="bg-[#172220] border border-cyan-700 rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-2xl text-base">
+                                <div className="border-b border-emerald-900/60 pb-2.5">
+                                    <h3 className="font-extrabold text-white text-base">フィードバック記入</h3>
+                                    <p className="text-xs text-cyan-300 mt-0.5">
+                                        対象: {latestTargetKarte ? `${latestTargetKarte.date} (${latestTargetKarte.goalStyle})` : '最新Action'}
+                                    </p>
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-slate-300 font-bold mb-1.5">アドバイス・指導メモ:</label>
+                                    <textarea 
+                                        rows="4"
+                                        value={feedbackInputText}
+                                        onChange={(e) => setFeedbackInputText(e.target.value)}
+                                        placeholder="例: 右肘の高さはモデル横に立つことで解決。次回チェックします。"
+                                        className="w-full bg-[#0f1715] border border-cyan-900 rounded-xl p-3 text-base text-white font-sans"
+                                    ></textarea>
+                                </div>
+                                <div className="flex gap-2.5 pt-1">
+                                    <button 
+                                        onClick={() => setFeedbackModalOpen(false)} 
+                                        className="flex-1 bg-slate-800 text-slate-300 font-bold py-3 rounded-xl text-sm"
+                                    >
+                                        キャンセル
+                                    </button>
+                                    <button 
+                                        onClick={saveReportFeedback} 
+                                        className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-black py-3 rounded-xl text-sm shadow"
+                                    >
+                                        Actionへ反映
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
