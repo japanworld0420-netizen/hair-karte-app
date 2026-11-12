@@ -33,13 +33,10 @@
             '9分割': ['1. フロント', '2. 右サイド', '3. 左サイド', '4. トップ', '5. 右ミドル', '6. 左ミドル', '7. 右アンダー', '8. 左アンダー', '9. ネープ']
         };
 
-        const STORAGE_KEY_STYLES = 'hair_karte_styles_v46';
-        const STORAGE_KEY_TECHS = 'hair_karte_techs_v46';
-        const STORAGE_KEY_HISTORY = 'hair_karte_history_v46';
-        const STORAGE_KEY_AUTHOR = 'hair_karte_author_v46';
-        const STORAGE_KEY_ALIAS = 'hair_karte_alias_v46';
-        const STORAGE_KEY_PENDING_REFLECTIONS = 'hair_karte_pending_reflections_v46';
-        const STORAGE_KEY_PENDING_EVALS = 'hair_karte_pending_evals_v46';
+        const STORAGE_KEY_STYLES = 'hair_karte_styles_v48';
+        const STORAGE_KEY_TECHS = 'hair_karte_techs_v48';
+        const STORAGE_KEY_HISTORY = 'hair_karte_history_v48';
+        const STORAGE_KEY_AUTHOR = 'hair_karte_author_v48';
 
         function App() {
             const todayStr = new Date().toISOString().split('T')[0];
@@ -64,14 +61,6 @@
                 try { return localStorage.getItem(STORAGE_KEY_AUTHOR) || '高橋 店長'; } catch (e) { return '高橋 店長'; }
             });
 
-            const [aliasMap, setAliasMap] = useState(() => {
-                try {
-                    const saved = localStorage.getItem(STORAGE_KEY_ALIAS);
-                    return saved ? JSON.parse(saved) : {};
-                } catch (e) { return {}; }
-            });
-
-            // 履歴は完全に空（[]）からスタート
             const [history, setHistory] = useState(() => {
                 try {
                     const saved = localStorage.getItem(STORAGE_KEY_HISTORY);
@@ -79,35 +68,29 @@
                 } catch (e) { return []; }
             });
 
-            const [pendingReflections, setPendingReflections] = useState(() => {
+            // データの保存とブラウザストレージの保護（永続化要求）
+            useEffect(() => {
                 try {
-                    const saved = localStorage.getItem(STORAGE_KEY_PENDING_REFLECTIONS);
-                    return saved ? JSON.parse(saved) : [];
-                } catch (e) { return []; }
-            });
+                    localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(history));
+                    if (navigator.storage && navigator.storage.persist) {
+                        navigator.storage.persist().then(granted => {
+                            if (granted) console.log("端末ストレージが保護されました");
+                        });
+                    }
+                } catch (e) {}
+            }, [history]);
 
-            const [pendingEvals, setPendingEvals] = useState(() => {
-                try {
-                    const saved = localStorage.getItem(STORAGE_KEY_PENDING_EVALS);
-                    return saved ? JSON.parse(saved) : [];
-                } catch (e) { return []; }
-            });
-
+            const [pendingReflections, setPendingReflections] = useState([]);
+            const [pendingEvals, setPendingEvals] = useState([]);
             const [selectedReflectionIndex, setSelectedReflectionIndex] = useState(0);
             const [selectedEvalIndex, setSelectedEvalIndex] = useState(0);
 
-            // レポート用スタイル選択 ＆ 集計期間
             const [reportStartDate, setReportStartDate] = useState('');
             const [reportEndDate, setReportEndDate] = useState(todayStr);
             const [reportSelectedStyle, setReportSelectedStyle] = useState('ALL');
-
-            // 分析画面用のスタイル選択
             const [analysisSelectedStyle, setAnalysisSelectedStyle] = useState('ALL');
-
-            // Action画面用のスタイル索引
             const [previewSelectedStyle, setPreviewSelectedStyle] = useState('ALL');
 
-            // フィードバック入力モーダル
             const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
             const [feedbackInputText, setFeedbackInputText] = useState('');
 
@@ -155,10 +138,8 @@
 
             const [currentKarte, setCurrentKarte] = useState(createCleanKarte);
             const [modalData, setModalData] = useState(null);
-
             const [expandedTechniqueKey, setExpandedTechniqueKey] = useState(null);
             const [expandedSectionKey, setExpandedSectionKey] = useState(null);
-
             const [newInput, setNewInput] = useState({ intent: '', discovery: '', teacherAdvice: '', nextAction: '' });
 
             const handleBlockingChange = (newBlocking) => {
@@ -234,8 +215,6 @@
 
                 const updatedReflections = [...pendingReflections, newItem];
                 setPendingReflections(updatedReflections);
-                try { localStorage.setItem(STORAGE_KEY_PENDING_REFLECTIONS, JSON.stringify(updatedReflections)); } catch (e) {}
-
                 setSelectedReflectionIndex(updatedReflections.length - 1);
                 setCurrentKarte(createCleanKarte());
                 setInputStep('step1_setting');
@@ -247,7 +226,6 @@
                     if (prev.length === 0) return prev;
                     const copy = [...prev];
                     copy[selectedReflectionIndex] = updater(copy[selectedReflectionIndex]);
-                    try { localStorage.setItem(STORAGE_KEY_PENDING_REFLECTIONS, JSON.stringify(copy)); } catch (e) {}
                     return copy;
                 });
             };
@@ -285,11 +263,9 @@
 
                 const updatedEvals = [...pendingEvals, evalItem];
                 setPendingEvals(updatedEvals);
-                try { localStorage.setItem(STORAGE_KEY_PENDING_EVALS, JSON.stringify(updatedEvals)); } catch (e) {}
 
                 const remainingReflections = pendingReflections.filter((_, idx) => idx !== selectedReflectionIndex);
                 setPendingReflections(remainingReflections);
-                try { localStorage.setItem(STORAGE_KEY_PENDING_REFLECTIONS, JSON.stringify(remainingReflections)); } catch (e) {}
 
                 setSelectedReflectionIndex(Math.max(0, remainingReflections.length - 1));
                 setSelectedEvalIndex(updatedEvals.length - 1);
@@ -301,7 +277,6 @@
                     if (prev.length === 0) return prev;
                     const copy = [...prev];
                     copy[selectedEvalIndex] = updater(copy[selectedEvalIndex]);
-                    try { localStorage.setItem(STORAGE_KEY_PENDING_EVALS, JSON.stringify(copy)); } catch (e) {}
                     return copy;
                 });
             };
@@ -318,17 +293,47 @@
 
                 const updatedHistory = [finalEntry, ...history];
                 setHistory(updatedHistory);
-                try { localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(updatedHistory)); } catch (e) {}
 
                 const remainingEvals = pendingEvals.filter((_, idx) => idx !== selectedEvalIndex);
                 setPendingEvals(remainingEvals);
-                try { localStorage.setItem(STORAGE_KEY_PENDING_EVALS, JSON.stringify(remainingEvals)); } catch (e) {}
 
                 setSelectedEvalIndex(Math.max(0, remainingEvals.length - 1));
                 alert('カルテ履歴に正式登録されました！');
 
                 setNewInput({ intent: '', discovery: '', teacherAdvice: '', nextAction: '' });
                 setActiveTab('history');
+            };
+
+            // データのエクスポート（バックアップファイル作成）
+            const exportData = () => {
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(history));
+                const downloadAnchor = document.createElement('a');
+                downloadAnchor.setAttribute("href", dataStr);
+                downloadAnchor.setAttribute("download", `hair_karte_backup_${todayStr}.json`);
+                document.body.appendChild(downloadAnchor);
+                downloadAnchor.click();
+                downloadAnchor.remove();
+            };
+
+            // データのインポート（他端末からの移行）
+            const importData = (e) => {
+                const fileReader = new FileReader();
+                if (e.target.files[0]) {
+                    fileReader.readAsText(e.target.files[0], "UTF-8");
+                    fileReader.onload = (event) => {
+                        try {
+                            const importedHistory = JSON.parse(event.target.result);
+                            if (Array.isArray(importedHistory)) {
+                                setHistory(importedHistory);
+                                alert('データを正常に読み込み（移行）しました！');
+                            } else {
+                                alert('ファイルの形式が正しくありません。');
+                            }
+                        } catch (error) {
+                            alert('ファイルの読み込みに失敗しました。');
+                        }
+                    };
+                }
             };
 
             const analysisFilteredHistory = history.filter(item => {
@@ -351,8 +356,6 @@
                             let rawAdvice = (t.teacherSectionAdvice || '').trim();
                             if (!rawAdvice) return;
 
-                            const advice = aliasMap[rawAdvice] || rawAdvice;
-
                             if (!techMap[tech]) {
                                 techMap[tech] = { technique: tech, totalCount: 0, sectionsMap: {} };
                             }
@@ -364,22 +367,18 @@
                             techMap[tech].sectionsMap[secName].sectionCount++;
                             techMap[tech].sectionsMap[secName].kartes.push(karte);
 
-                            if (!techMap[tech].sectionsMap[secName].advicesMap[advice]) {
-                                techMap[tech].sectionsMap[secName].advicesMap[advice] = { adviceText: advice, rawTexts: new Set(), count: 0, kartes: [] };
+                            if (!techMap[tech].sectionsMap[secName].advicesMap[rawAdvice]) {
+                                techMap[tech].sectionsMap[secName].advicesMap[rawAdvice] = { adviceText: rawAdvice, count: 0, kartes: [] };
                             }
-                            techMap[tech].sectionsMap[secName].advicesMap[advice].rawTexts.add(rawAdvice);
-                            techMap[tech].sectionsMap[secName].advicesMap[advice].count++;
-                            techMap[tech].sectionsMap[secName].advicesMap[advice].kartes.push(karte);
+                            techMap[tech].sectionsMap[secName].advicesMap[rawAdvice].count++;
+                            techMap[tech].sectionsMap[secName].advicesMap[rawAdvice].kartes.push(karte);
                         });
                     });
                 });
 
                 return Object.values(techMap).map(techObj => {
                     const sectionsArray = Object.values(techObj.sectionsMap).map(secObj => {
-                        const advicesArray = Object.values(secObj.advicesMap).map(adv => ({
-                            ...adv,
-                            rawTextsList: Array.from(adv.rawTexts)
-                        })).sort((a, b) => b.count - a.count);
+                        const advicesArray = Object.values(secObj.advicesMap).sort((a, b) => b.count - a.count);
                         return { ...secObj, advices: advicesArray };
                     }).sort((a, b) => b.sectionCount - a.sectionCount);
                     return { ...techObj, sections: sectionsArray };
@@ -406,7 +405,6 @@
             const currentReflectionItem = pendingReflections[selectedReflectionIndex] || null;
             const currentEvalItem = pendingEvals[selectedEvalIndex] || null;
 
-            // レポート用フィルタ
             const reportFilteredHistory = history.filter(item => {
                 if (!item || !item.date) return false;
                 if (reportStartDate && item.date < reportStartDate) return false;
@@ -423,11 +421,9 @@
                     techList.forEach(t => {
                         if (t.teacherSectionAdvice && t.teacherSectionAdvice.trim()) {
                             const rawAdvice = t.teacherSectionAdvice.trim();
-                            const advice = aliasMap[rawAdvice] || rawAdvice;
-
-                            if (!reportAdviceSummaryMap[advice]) {
-                                reportAdviceSummaryMap[advice] = {
-                                    adviceText: advice,
+                            if (!reportAdviceSummaryMap[rawAdvice]) {
+                                reportAdviceSummaryMap[rawAdvice] = {
+                                    adviceText: rawAdvice,
                                     count: 0,
                                     issue: '入力されたアドバイスに基づく改善点',
                                     action: rawAdvice,
@@ -435,9 +431,9 @@
                                     kartes: []
                                 };
                             }
-                            reportAdviceSummaryMap[advice].count++;
-                            if (!reportAdviceSummaryMap[advice].kartes.some(k => k.id === karte.id)) {
-                                reportAdviceSummaryMap[advice].kartes.push(karte);
+                            reportAdviceSummaryMap[rawAdvice].count++;
+                            if (!reportAdviceSummaryMap[rawAdvice].kartes.some(k => k.id === karte.id)) {
+                                reportAdviceSummaryMap[rawAdvice].kartes.push(karte);
                             }
                         }
                     });
@@ -453,7 +449,6 @@
 
             const topAdvice = sortedAdviceSummaries[0];
             
-            // データがまだ無い場合は正しい案内文にする
             const conclusionText = history.length === 0 
                 ? '現在登録されているカルテデータがありません。「新規」タブからカルテを作成・登録してください。' 
                 : (topAdvice 
@@ -478,8 +473,6 @@
                 });
 
                 setHistory(updatedHistory);
-                try { localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(updatedHistory)); } catch (e) {}
-
                 setFeedbackModalOpen(false);
                 setFeedbackInputText('');
                 alert(`「${latestTargetKarte.goalStyle}」の最新Action文にフィードバックを追加しました！`);
@@ -789,9 +782,29 @@
                         </div>
                     )}
 
-                    {/* タブ5: 履歴 */}
+                    {/* タブ5: 履歴 ＆ バックアップ機能 */}
                     {activeTab === 'history' && (
                         <div className="space-y-4">
+                            {/* データ移行・バックアップ用パネル */}
+                            <div className="bg-[#172220] p-4 rounded-2xl border border-emerald-900/40 space-y-3">
+                                <h3 className="font-bold text-emerald-300 text-sm">データバックアップ・端末間移行</h3>
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={exportData}
+                                        className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 px-3 rounded-xl text-xs shadow transition"
+                                    >
+                                        ↓ データをファイルに保存
+                                    </button>
+                                    <label className="flex-1 bg-cyan-700 hover:bg-cyan-600 text-slate-950 font-bold py-2 px-3 rounded-xl text-xs text-center cursor-pointer shadow transition flex items-center justify-center">
+                                        <span>↑ ファイルから読み込み</span>
+                                        <input type="file" accept=".json" onChange={importData} className="hidden" />
+                                    </label>
+                                </div>
+                                <p className="text-[11px] text-slate-400 leading-tight">
+                                    ※機種変更や別端末へ移行する際は「データをファイルに保存」でダウンロードし、新しい端末で「ファイルから読み込み」を行ってください。
+                                </p>
+                            </div>
+
                             <div className="bg-[#172220] p-4 rounded-2xl border border-emerald-900/40 flex justify-between items-center">
                                 <h2 className="font-bold text-white text-base">蓄積済みカルテ履歴（新しい順 / {history.length}件）</h2>
                                 {history.length > 0 && (
